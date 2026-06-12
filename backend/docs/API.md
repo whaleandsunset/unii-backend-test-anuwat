@@ -1,7 +1,8 @@
-# เอกสาร API
+# API Document
 
-เอกสารนี้อธิบาย API ของระบบสรุปยอดซื้อ-ขายรายสินค้า โดยเน้น endpoint ที่เกี่ยวข้องกับการนำข้อมูลเข้า
-และการเรียกดูรายงานตามเงื่อนไขที่โจทย์กำหนด
+เอกสารนี้สรุป API ของระบบสรุปยอดซื้อ-ขายรายสินค้า โดยแยกตามหน้าที่ของแต่ละ module
+และอธิบายจุดสำคัญที่เกี่ยวข้องกับโจทย์ เช่น การ sync ข้อมูล, การ filter หลายเงื่อนไข,
+การค้นหา orderId และการคำนวณยอดตาม grade
 
 Base URL สำหรับ local development:
 
@@ -9,65 +10,78 @@ Base URL สำหรับ local development:
 http://localhost:3000/api
 ```
 
-## ภาพรวมการใช้งาน
+## ภาพรวมการทำงาน
 
-ระบบมี flow หลักดังนี้:
+ระบบไม่ได้คำนวณรายงานจากไฟล์ JSON โดยตรง แต่จะนำข้อมูลจาก source API เข้าฐานข้อมูลก่อน
+จากนั้น summary API จะอ่านข้อมูลจาก PostgreSQL เพื่อคำนวณผลลัพธ์ตาม filter ที่ส่งเข้ามา
+
+ลำดับการใช้งานหลังจาก setup database แล้ว:
 
 ```text
-1. Sync product master data
+1. Sync ข้อมูลสินค้า
    POST /api/imports/products/sync
 
-2. Sync order data
+2. Sync ข้อมูล order
    POST /api/imports/orders/sync
 
-3. เรียกดูข้อมูลสำหรับ dropdown
+3. โหลด category/subCategory สำหรับ filter
    GET /api/categories
    GET /api/categories/:categoryId/sub-categories
 
-4. เรียกดูรายงาน summary
+4. เรียกดูรายงานสรุป
    GET /api/product-summaries
 ```
 
-ต้อง sync ข้อมูลสินค้าก่อนข้อมูล order เสมอ เพราะ `order_items` มี foreign key ไปยัง
-`categories` และ `sub_categories`
+ต้อง sync product master data ก่อน order เสมอ เพราะ order item ต้องอ้างอิง
+`categoryId` และ `subCategoryId` ที่มีอยู่ในระบบแล้ว
 
-## Response Format
+## Response Convention
 
-API ทั้งหมดส่ง response เป็น JSON
+API ส่ง response เป็น JSON ทั้งหมด
 
-ตัวเลขประเภทน้ำหนัก ราคา และยอดเงินใน summary response จะถูกส่งเป็น string เช่น `"588286.17"`
-เพื่อรักษาความแม่นยำของค่าทศนิยมจาก PostgreSQL/Prisma Decimal
+สำหรับ summary response ค่าเงิน น้ำหนัก และราคาต่อกิโลกรัมจะส่งเป็น string เช่น:
 
-## 1. Import Data
+```json
+{
+  "buyQuantityKg": "588286.17",
+  "buyTotalAmount": "6942596.82"
+}
+```
 
-Module นี้ใช้สำหรับนำข้อมูลจาก source URL หรือ request body เข้าฐานข้อมูล
+เหตุผลคือค่ากลุ่มนี้มาจาก `Decimal` ใน PostgreSQL/Prisma การส่งเป็น string ช่วยลดปัญหา precision
+ของ JavaScript number และทำให้ frontend format ตัวเลขเองได้ชัดเจน
 
-Source URL ที่ใช้:
+## Import APIs
+
+Import APIs ใช้สำหรับนำข้อมูลจาก source เข้าฐานข้อมูล มีทั้งแบบ sync จาก URL และแบบส่ง payload
+เข้ามาทาง request body
+
+Source URL ที่ config ผ่าน `.env`:
 
 ```text
 PRODUCT_SOURCE_URL=https://apirecycle.unii.co.th/category/query-product-demo
 ORDER_SOURCE_URL=https://apirecycle.unii.co.th/Stock/query-transaction-demo
 ```
 
-### Sync product master data
+### Sync Product Master Data
 
 ```http
 POST /api/imports/products/sync
 ```
 
-ดึงข้อมูลจาก `PRODUCT_SOURCE_URL` แล้วบันทึกลงตาราง:
+Endpoint นี้ดึงข้อมูลจาก `PRODUCT_SOURCE_URL` แล้วบันทึกลง:
 
 ```text
 categories
 sub_categories
 ```
 
-การทำงานหลัก:
+สิ่งที่ service ทำ:
 
 - อ่าน `productList` จาก source
 - upsert category ด้วย `categoryId`
 - upsert subCategory ด้วย `subCategoryId`
-- ผูก subCategory เข้ากับ category ผ่าน `categoryId`
+- ผูก subCategory กับ category ผ่าน `categoryId`
 
 ตัวอย่าง response:
 
@@ -78,31 +92,31 @@ sub_categories
 }
 ```
 
-### Sync orders
+### Sync Orders
 
 ```http
 POST /api/imports/orders/sync
 ```
 
-ดึงข้อมูลจาก `ORDER_SOURCE_URL` แล้วบันทึกลงตาราง:
+Endpoint นี้ดึงข้อมูลจาก `ORDER_SOURCE_URL` แล้วบันทึกลง:
 
 ```text
 orders
 order_items
 ```
 
-การทำงานหลัก:
+สิ่งที่ service ทำ:
 
-- รวมข้อมูลจาก `buyTransaction` และ `sellTransaction`
-- แปลง transaction ฝั่งซื้อเป็น `BUY`
-- แปลง transaction ฝั่งขายเป็น `SELL`
-- เก็บหัว order ลงตาราง `orders`
-- แตกข้อมูลสินค้า/เกรดใน order ลงตาราง `order_items`
-- เก็บเฉพาะ grade ที่ระบบรองรับ: `A`, `B`, `C`, `D`
-- ถ้า source ส่ง `total` เป็น 0 ระบบจะ fallback เป็น `quantity * price`
+- อ่านข้อมูลจาก `buyTransaction` และ `sellTransaction`
+- map รายการซื้อเป็น `transactionType = BUY`
+- map รายการขายเป็น `transactionType = SELL`
+- บันทึกหัว order ลง `orders`
+- แตกข้อมูลรายการสินค้า/grade ลง `order_items`
+- เก็บเฉพาะ grade ที่รองรับคือ `A`, `B`, `C`, `D`
+- ถ้า source ส่ง `total` เป็น `0` จะคำนวณ fallback จาก `quantity * price`
 
-ก่อนบันทึก order ระบบจะตรวจว่า `categoryId` และ `subCategoryId` มีอยู่ใน master data แล้วหรือไม่
-ถ้ายังไม่มี จะ reject request เพื่อป้องกันข้อมูล relation ไม่ครบ
+ก่อนบันทึก order ระบบจะตรวจ master data ก่อน ถ้า order อ้างถึง category/subCategory ที่ยังไม่มี
+จะตอบ error กลับไป เพื่อป้องกันไม่ให้ข้อมูล relation ขาด
 
 ตัวอย่าง response:
 
@@ -113,48 +127,37 @@ order_items
 }
 ```
 
-### Import products ผ่าน request body
+### Import Product Payload
 
 ```http
 POST /api/imports/products
 Content-Type: application/json
 ```
 
-ใช้เมื่อมี payload ของ product อยู่แล้วและต้องการส่งเข้า API โดยตรง
+ใช้สำหรับกรณีที่มี product payload อยู่แล้วและต้องการส่งเข้า API โดยตรง
+รูปแบบ payload ต้องตรงกับ source `query-product-demo`
 
-รูปแบบ payload ต้องตรงกับ source:
-
-```text
-https://apirecycle.unii.co.th/category/query-product-demo
-```
-
-### Import orders ผ่าน request body
+### Import Order Payload
 
 ```http
 POST /api/imports/orders
 Content-Type: application/json
 ```
 
-ใช้เมื่อมี payload ของ order อยู่แล้วและต้องการส่งเข้า API โดยตรง
+ใช้สำหรับกรณีที่มี order payload อยู่แล้วและต้องการส่งเข้า API โดยตรง
+รูปแบบ payload ต้องตรงกับ source `query-transaction-demo`
 
-รูปแบบ payload ต้องตรงกับ source:
+## Category APIs
 
-```text
-https://apirecycle.unii.co.th/Stock/query-transaction-demo
-```
+API กลุ่มนี้ใช้สำหรับ dropdown/filter ของหน้า UI
 
-## 2. Categories
-
-Module นี้ใช้สำหรับ dropdown ของหน้า filter โดยเฉพาะกรณีเลือก Category แล้วต้องจำกัดรายการ SubCategory
-ให้ตรงกับ Category นั้น
-
-### Get categories
+### Get Categories
 
 ```http
 GET /api/categories
 ```
 
-คืนรายการ category พร้อม subCategories
+คืนรายการ category พร้อม subCategories ภายใต้ category นั้น
 
 ตัวอย่าง response แบบย่อ:
 
@@ -173,13 +176,13 @@ GET /api/categories
 ]
 ```
 
-### Get subcategories by category
+### Get SubCategories By Category
 
 ```http
 GET /api/categories/:categoryId/sub-categories
 ```
 
-ใช้โหลดเฉพาะ subCategory ที่อยู่ใต้ category ที่เลือก
+ใช้เมื่อต้องการจำกัดตัวเลือก SubCategory ให้ตรงกับ Category ที่เลือก
 
 ตัวอย่าง:
 
@@ -202,17 +205,18 @@ GET /api/categories/01/sub-categories
 ]
 ```
 
-## 3. Orders
+## Order APIs
 
-Module นี้ใช้สำหรับดูข้อมูล order ที่ถูก import แล้ว เหมาะสำหรับตรวจสอบข้อมูลต้นทางหลัง sync
+API กลุ่มนี้ใช้สำหรับตรวจสอบ order ที่ถูก import แล้ว ไม่ใช่ endpoint หลักของรายงาน
+แต่ช่วย debug หรือ verify ข้อมูลต้นทางได้
 
-### Get orders
+### Get Orders
 
 ```http
 GET /api/orders
 ```
 
-รองรับ query params:
+Query params:
 
 | Query param | Required | รายละเอียด |
 | --- | --- | --- |
@@ -226,13 +230,13 @@ GET /api/orders
 GET /api/orders?startDate=2024-04-01&endDate=2024-04-30&orderId=CUNIIPRO
 ```
 
-### Get order detail
+### Get Order Detail
 
 ```http
 GET /api/orders/:orderId
 ```
 
-คืนข้อมูล order เดียวพร้อมรายการ items ภายใน order
+คืนข้อมูล order เดียวพร้อม items ภายใน order
 
 ตัวอย่าง:
 
@@ -240,32 +244,31 @@ GET /api/orders/:orderId
 GET /api/orders/CUNIIPRO20240409110012
 ```
 
-## 4. Product Summaries
+## Product Summary API
 
-Endpoint หลักของ assignment สำหรับสรุปยอดซื้อ-ขายรายสินค้าในระดับ SubCategory
-
-### Get product summaries
+Endpoint นี้เป็น API หลักของ assignment ใช้สรุปยอดซื้อ-ขายในระดับ SubCategory
+และรองรับ filter หลายเงื่อนไขพร้อมกัน
 
 ```http
 GET /api/product-summaries
 ```
 
-ข้อมูลที่สรุป:
+ผลลัพธ์ในแต่ละแถวคือ summary ของ 1 SubCategory ภายใต้ Category นั้น ๆ
+
+ข้อมูลที่ API คำนวณให้:
 
 - น้ำหนักซื้อรวม
 - ยอดซื้อรวม
 - น้ำหนักซื้อแยกตาม grade
-- orderId ฝั่งซื้อ
+- orderId ฝั่งซื้อที่เกี่ยวข้อง
 - น้ำหนักขายรวม
 - ยอดขายรวม
 - น้ำหนักขายแยกตาม grade
-- orderId ฝั่งขาย
+- orderId ฝั่งขายที่เกี่ยวข้อง
 - น้ำหนักคงเหลือ
 - มูลค่าคงเหลือ
 
 ### Filters
-
-API รองรับการส่งหลาย filter พร้อมกัน
 
 | Query param | Required | รายละเอียด |
 | --- | --- | --- |
@@ -278,50 +281,49 @@ API รองรับการส่งหลาย filter พร้อมก�
 | `maxPrice` | No | ราคาต่อกิโลกรัมสูงสุด |
 | `grade` | No | `A`, `B`, `C`, หรือ `D` |
 
-ตัวอย่าง:
+ตัวอย่างการเรียกหลาย filter พร้อมกัน:
 
 ```http
 GET /api/product-summaries?startDate=2024-04-01&endDate=2024-04-30&categoryId=01&subCategoryId=0101&orderId=CUNIIPRO&minPrice=1&maxPrice=100&grade=A
 ```
 
-### รายละเอียด logic ของ filter
+### Filter Behavior
 
 `startDate` และ `endDate`
 
 ```text
 กรองจาก orders.order_finished_date
-ถ้าส่งทั้ง startDate และ endDate ระบบจะค้นหาแบบช่วงวัน
+ถ้าส่งทั้งสองค่า ระบบจะค้นหาแบบช่วงวันที่
 ```
 
 `categoryId` และ `subCategoryId`
 
 ```text
 กรองจาก order_items.category_id และ order_items.sub_category_id
-frontend ใช้ GET /api/categories/:categoryId/sub-categories เพื่อจำกัดตัวเลือก subCategory ให้ตรงกับ category
 ```
 
 `orderId`
 
 ```text
 ใช้ contains search แบบ case-insensitive
-เช่น orderId=CUNIIPRO จะเจอ order_id ที่มีคำว่า CUNIIPRO อยู่ข้างใน
+เช่น orderId=CUNIIPRO จะเจอทั้ง CUNIIPRO20240409110012 และ order อื่นที่มีคำนี้อยู่ในเลข order
 ```
 
 `minPrice` และ `maxPrice`
 
 ```text
 กรองจาก order_items.price_per_kg
-ใช้กับราคาต่อกิโลกรัมของ item ทั้งฝั่งซื้อและฝั่งขาย
+ใช้กับ item ทั้งฝั่งซื้อและฝั่งขาย
 ```
 
 `grade`
 
 ```text
-ระบบ filter ที่ order_items.grade ก่อน aggregate
-ดังนั้น quantity และ amount ที่สรุปออกมาจะเป็นยอดเฉพาะ grade ที่เลือก
+กรองที่ order_items.grade ก่อน aggregate
+ดังนั้นถ้าเลือก grade=A ยอดรวมทั้งหมดจะคำนวณจาก item grade A เท่านั้น
 ```
 
-### Response fields
+### Response Fields
 
 | Field | Type | รายละเอียด |
 | --- | --- | --- |
@@ -353,7 +355,7 @@ frontend ใช้ GET /api/categories/:categoryId/sub-categories เพื่�
 }
 ```
 
-ระบบจะไม่แสดง grade ที่มียอด `0 กก.` ใน breakdown เพื่อลด noise บนหน้า UI
+ระบบจะไม่ส่ง grade ที่มียอด `0 กก.` ออกมาใน breakdown เพื่อลดข้อมูลที่ไม่จำเป็นบนหน้า UI
 
 ตัวอย่าง response แบบย่อ:
 
@@ -392,22 +394,20 @@ frontend ใช้ GET /api/categories/:categoryId/sub-categories เพื่�
 ]
 ```
 
-## Validation และ Error Handling
+## Error Handling
 
-ระบบเปิดใช้ NestJS ValidationPipe สำหรับ query/body ที่มี DTO
+ระบบใช้ `ValidationPipe` ของ NestJS สำหรับ validate query/body ที่ผูกกับ DTO
 
-ตัวอย่าง error ที่อาจเกิดขึ้น:
+ตัวอย่าง error ที่ออกแบบไว้:
 
 | กรณี | HTTP Status | รายละเอียด |
 | --- | --- | --- |
 | ไม่ได้ตั้งค่า source URL | `400` | ยังไม่มี `ORDER_SOURCE_URL` หรือ `PRODUCT_SOURCE_URL` |
-| source API ตอบกลับไม่สำเร็จ | `400` | request ไป source URL ไม่สำเร็จ |
-| import order ก่อน product master | `400` | category/subCategory ที่ order อ้างถึงยังไม่มีใน database |
+| source API ตอบกลับไม่สำเร็จ | `400` | เรียก source URL ไม่สำเร็จ |
+| import order ก่อน product master | `400` | order อ้างถึง category/subCategory ที่ยังไม่มี |
 | ส่ง grade ไม่ถูกต้อง | `400` | ต้องเป็น `A`, `B`, `C`, หรือ `D` |
 
-## หมายเหตุสำหรับการทดสอบ
-
-ลำดับที่แนะนำหลัง setup database:
+## ตัวอย่างการทดสอบด้วย curl
 
 ```bash
 curl -X POST http://localhost:3000/api/imports/products/sync

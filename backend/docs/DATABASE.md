@@ -1,30 +1,20 @@
-# เอกสารออกแบบฐานข้อมูล
+# Database Design
 
-เอกสารนี้อธิบายแนวคิดการออกแบบฐานข้อมูลของระบบสรุปยอดซื้อ-ขายรายสินค้า
-โดยอ้างอิงจากข้อมูล 2 แหล่งที่โจทย์กำหนด:
+เอกสารนี้อธิบายการออกแบบฐานข้อมูลของระบบสรุปยอดซื้อ-ขายรายสินค้า
+โดยอ้างอิงจากข้อมูลที่โจทย์ให้มา 2 ชุด:
 
 ```text
-1. Product master data: Category / SubCategory
-2. Order transaction data: Buy / Sell orders
+1. ข้อมูลสินค้า: Category / SubCategory
+2. ข้อมูล order: Buy / Sell transaction
 ```
 
-ระบบเลือกใช้ PostgreSQL เพราะข้อมูลมีความสัมพันธ์ชัดเจน และรายงานต้อง query แบบ join/aggregate
-หลายเงื่อนไขพร้อมกัน เช่น วันที่, category, subCategory, grade, ราคา และ orderId
+ข้อมูลลักษณะนี้เหมาะกับ relational database เพราะมีความสัมพันธ์ชัดเจนระหว่างหมวดหมู่สินค้า,
+รายการสินค้าใน order และหัว order อีกทั้งรายงานต้องใช้การ join และ aggregate หลายเงื่อนไขพร้อมกัน
+จึงเลือกใช้ PostgreSQL ร่วมกับ Prisma
 
-## เป้าหมายของ schema
+## แนวคิดหลัก
 
-การออกแบบฐานข้อมูลในโปรเจกต์นี้มีเป้าหมายหลักดังนี้:
-
-- เก็บข้อมูลสินค้าเป็น master data เพื่อไม่ให้ชื่อ category/subCategory ซ้ำในทุก order
-- เก็บ order และ order item เป็น transaction data เพื่อรองรับการคำนวณย้อนหลัง
-- รองรับการ filter หลายเงื่อนไขพร้อมกันตามโจทย์
-- รองรับการ group summary ในระดับ SubCategory ภายใต้ Category
-- ทำให้ frontend จำกัดตัวเลือก SubCategory ตาม Category ได้ง่าย
-- วาง index ตาม field ที่ถูกใช้ค้นหาและ aggregate บ่อย
-
-## การแบ่งข้อมูล
-
-โครงสร้างข้อมูลถูกแยกออกเป็น 2 กลุ่ม:
+ฐานข้อมูลถูกแบ่งเป็น 2 กลุ่มใหญ่:
 
 ```text
 Master data
@@ -36,8 +26,11 @@ Transaction data
   - order_items
 ```
 
-แนวทางนี้ช่วยให้ข้อมูลสินค้าเป็นแหล่งอ้างอิงเดียว และช่วยให้ summary query สามารถ join เพื่อดึงชื่อสินค้า
-พร้อมกับคำนวณยอดซื้อ-ขายจาก transaction data ได้โดยตรง
+เหตุผลที่แยกแบบนี้คือข้อมูลสินค้าเป็นข้อมูลอ้างอิงที่ใช้ซ้ำหลาย order
+ส่วน order และ order item เป็นข้อมูลความเคลื่อนไหวที่ใช้คำนวณยอดซื้อ-ขาย
+
+ถ้าเก็บทุกอย่างรวมในตารางเดียว รายงานอาจทำได้เร็วในช่วงแรก แต่จะเกิดข้อมูลซ้ำจำนวนมาก
+และแก้ไขชื่อ category/subCategory ยากกว่า การแยก master data ออกมาจึงเหมาะกับงานนี้มากกว่า
 
 ## ERD แบบย่อ
 
@@ -53,86 +46,75 @@ orders
   1 -> many order_items
 ```
 
-มุมมองแบบ flow:
+มุมมองในเชิงการใช้งาน:
 
 ```text
-categories
-  └── sub_categories
-
-orders
-  └── order_items
-        ├── category_id      -> categories.category_id
-        └── sub_category_id  -> sub_categories.sub_category_id
+Category
+  └── SubCategory
+        └── OrderItem
+              └── Order
 ```
 
-`order_items` เป็นตารางสำคัญที่สุดของรายงาน เพราะเป็นระดับข้อมูลที่มี category, subCategory,
-grade, quantity, price และ amount ครบในแถวเดียว
+`order_items` เป็นตารางที่สำคัญที่สุดสำหรับรายงาน เพราะแต่ละแถวมีข้อมูลครบทั้ง
+category, subCategory, grade, quantity, price และ total amount
 
-## ตารางหลัก
+## Tables
 
-### 1. categories
+### categories
 
 เก็บหมวดหมู่หลักของสินค้า เช่น พลาสติก, โลหะ, กระดาษ
 
 | Column | Type | รายละเอียด |
 | --- | --- | --- |
 | `id` | UUID | primary key ภายในระบบ |
-| `category_id` | varchar(50) | รหัส category จาก source ใช้เป็น unique key |
+| `category_id` | varchar(50) | รหัส category จาก source และใช้เป็น unique key |
 | `category_name` | varchar(255) | ชื่อ category |
-| `created_at` | timestamp | วันที่สร้างข้อมูล |
-| `updated_at` | timestamp | วันที่อัปเดตข้อมูล |
+| `created_at` | timestamp | เวลาที่สร้างข้อมูล |
+| `updated_at` | timestamp | เวลาที่แก้ไขข้อมูลล่าสุด |
 
-เหตุผลที่ใช้ `category_id` เป็น unique key:
+`category_id` ถูกใช้เป็น unique key เพราะเป็นรหัสที่มากับ source และถูกอ้างอิงจากข้อมูล order
+ทำให้สามารถ upsert master data ได้โดยไม่สร้างข้อมูลซ้ำ
 
-- เป็นรหัสจาก source ที่ใช้เชื่อมกับ order item
-- ทำให้ upsert ข้อมูล master data ได้ตรงรายการเดิม
-- ใช้เป็น foreign key จาก `sub_categories` และ `order_items`
+### sub_categories
 
-### 2. sub_categories
-
-เก็บหมวดหมู่ย่อยของสินค้า โดยผูกกับ `categories.category_id`
+เก็บหมวดหมู่ย่อยของสินค้า และผูกกลับไปที่ `categories.category_id`
 
 | Column | Type | รายละเอียด |
 | --- | --- | --- |
 | `id` | UUID | primary key ภายในระบบ |
-| `sub_category_id` | varchar(50) | รหัส subCategory จาก source ใช้เป็น unique key |
+| `sub_category_id` | varchar(50) | รหัส subCategory จาก source และใช้เป็น unique key |
 | `category_id` | varchar(50) | foreign key ไปที่ `categories.category_id` |
 | `sub_category_name` | varchar(255) | ชื่อ subCategory |
-| `created_at` | timestamp | วันที่สร้างข้อมูล |
-| `updated_at` | timestamp | วันที่อัปเดตข้อมูล |
+| `created_at` | timestamp | เวลาที่สร้างข้อมูล |
+| `updated_at` | timestamp | เวลาที่แก้ไขข้อมูลล่าสุด |
 
-ประโยชน์ของการแยก `sub_categories`:
+การแยก `sub_categories` ออกมาเป็นตารางของตัวเองช่วยให้ frontend จำกัดตัวเลือก SubCategory
+ตาม Category ที่เลือกได้ตรงตาม requirement
 
-- แสดงรายการ SubCategory ตาม Category ที่เลือกได้ตรงตามโจทย์
-- ลดการเก็บชื่อ subCategory ซ้ำใน order item
-- ทำให้ข้อมูลสินค้ามีโครงสร้างชัดเจนและขยายต่อได้
-
-### 3. orders
+### orders
 
 เก็บข้อมูลระดับหัว order ทั้งฝั่งซื้อและฝั่งขาย
 
 | Column | Type | รายละเอียด |
 | --- | --- | --- |
 | `id` | UUID | primary key ภายในระบบ |
-| `order_id` | varchar(100) | หมายเลข order จาก source ใช้เป็น unique key |
-| `order_finished_date` | date | วันที่ order เสร็จ ใช้สำหรับ filter ช่วงวัน |
-| `transaction_type` | varchar(10) | ประเภท transaction: `BUY` หรือ `SELL` |
-| `created_at` | timestamp | วันที่สร้างข้อมูล |
-| `updated_at` | timestamp | วันที่อัปเดตข้อมูล |
+| `order_id` | varchar(100) | หมายเลข order จาก source และใช้เป็น unique key |
+| `order_finished_date` | date | วันที่ order เสร็จ ใช้สำหรับ filter ช่วงวันที่ |
+| `transaction_type` | varchar(10) | `BUY` หรือ `SELL` |
+| `created_at` | timestamp | เวลาที่สร้างข้อมูล |
+| `updated_at` | timestamp | เวลาที่แก้ไขข้อมูลล่าสุด |
 
-ข้อมูลซื้อและขายถูกเก็บในตารางเดียวกัน เพราะโครงสร้างข้อมูลเหมือนกัน
-และสามารถแยกด้วย `transaction_type` ตอนคำนวณ summary ได้ชัดเจน
-
-ตัวอย่าง:
+ข้อมูลซื้อและขายถูกเก็บในตารางเดียวกัน แล้วแยกด้วย `transaction_type`
+เพราะ source ทั้งสองฝั่งมีโครงสร้างใกล้เคียงกัน และการรวมไว้ที่เดียวทำให้ query summary ง่ายกว่า
 
 ```text
-buyTransaction  -> transaction_type = BUY
-sellTransaction -> transaction_type = SELL
+buyTransaction  -> BUY
+sellTransaction -> SELL
 ```
 
-### 4. order_items
+### order_items
 
-เก็บรายการสินค้าในแต่ละ order และเป็นแหล่งข้อมูลหลักสำหรับคำนวณรายงาน
+เก็บรายการสินค้าในแต่ละ order และเป็น source หลักในการคำนวณ summary
 
 | Column | Type | รายละเอียด |
 | --- | --- | --- |
@@ -144,66 +126,67 @@ sellTransaction -> transaction_type = SELL
 | `quantity_kg` | decimal(14,2) | น้ำหนักสินค้า หน่วยกิโลกรัม |
 | `price_per_kg` | decimal(14,2) | ราคาต่อกิโลกรัม |
 | `total_amount` | decimal(14,2) | มูลค่ารวมของ item |
-| `created_at` | timestamp | วันที่สร้างข้อมูล |
-| `updated_at` | timestamp | วันที่อัปเดตข้อมูล |
+| `created_at` | timestamp | เวลาที่สร้างข้อมูล |
+| `updated_at` | timestamp | เวลาที่แก้ไขข้อมูลล่าสุด |
 
-เหตุผลที่เก็บ `category_id` และ `sub_category_id` ใน `order_items`:
+ตารางนี้เก็บทั้ง `category_id` และ `sub_category_id` เพราะ requirement ของรายงานต้อง filter
+และ group ตามสอง field นี้โดยตรง อีกทั้ง order หนึ่งรายการสามารถมีสินค้าหลายประเภทได้
 
-- summary ต้อง group ตาม Category/SubCategory
-- filter ตาม category/subCategory เกิดขึ้นที่ระดับ item
-- order หนึ่งรายการสามารถมีสินค้าหลายประเภทได้
-- ลดความซับซ้อนของ query ตอน aggregate รายงาน
-
-## ความสัมพันธ์และ Foreign Key
+## Relationships
 
 | From | To | ความหมาย |
 | --- | --- | --- |
 | `sub_categories.category_id` | `categories.category_id` | subCategory อยู่ภายใต้ category |
-| `order_items.order_id` | `orders.order_id` | item อยู่ใน order |
-| `order_items.category_id` | `categories.category_id` | item เป็นสินค้าใน category ใด |
-| `order_items.sub_category_id` | `sub_categories.sub_category_id` | item เป็นสินค้าใน subCategory ใด |
+| `order_items.order_id` | `orders.order_id` | item อยู่ภายใต้ order |
+| `order_items.category_id` | `categories.category_id` | item อยู่ใน category ใด |
+| `order_items.sub_category_id` | `sub_categories.sub_category_id` | item อยู่ใน subCategory ใด |
 
-แนวทาง on delete:
+แนวทางการลบข้อมูล:
 
 - ถ้าลบ order จะลบ order items ของ order นั้นตามไปด้วย
-- ไม่อนุญาตให้ลบ category/subCategory ที่ยังถูกอ้างอิงโดย order item
+- ไม่อนุญาตให้ลบ category/subCategory ที่ยังถูก order item อ้างอิงอยู่
 
-## Index ที่ใช้
+แนวทางนี้ช่วยรักษาความถูกต้องของข้อมูลและลดโอกาสเกิด orphan records
 
-เพิ่ม index ตาม field ที่ใช้ filter, join และ aggregate บ่อย
+## Index Strategy
+
+Index ถูกวางตาม field ที่ใช้ filter, join และ aggregate บ่อย
 
 | Index | Field | ใช้กับงาน |
 | --- | --- | --- |
 | `idx_sub_categories_category_id` | `sub_categories.category_id` | โหลด SubCategory ตาม Category |
 | `idx_orders_finished_date` | `orders.order_finished_date` | filter ช่วงวันที่ |
 | `idx_orders_transaction_type` | `orders.transaction_type` | แยก BUY/SELL |
-| `idx_orders_order_id` | `orders.order_id` | ค้นหา order และ join |
+| `idx_orders_order_id` | `orders.order_id` | join และค้นหา order |
 | `idx_order_items_category_id` | `order_items.category_id` | filter category |
 | `idx_order_items_sub_category_id` | `order_items.sub_category_id` | filter subCategory |
 | `idx_order_items_grade` | `order_items.grade` | filter grade |
 | `idx_order_items_price_per_kg` | `order_items.price_per_kg` | filter ช่วงราคา |
-| `idx_order_items_summary_filters` | `category_id, sub_category_id, grade, price_per_kg` | ช่วย query summary ที่ใช้หลาย filter ร่วมกัน |
+| `idx_order_items_summary_filters` | `category_id, sub_category_id, grade, price_per_kg` | ช่วย query ที่ใช้หลาย filter พร้อมกัน |
 
-## ลำดับการ import ข้อมูล
+ใน assignment นี้ข้อมูลไม่ได้ใหญ่มาก แต่การวาง index ตาม query pattern ช่วยให้ schema พร้อมต่อยอด
+ถ้ามีข้อมูลเพิ่มในอนาคต
 
-ต้อง import product master data ก่อน order:
+## Import Flow
+
+ลำดับการ import สำคัญมาก:
 
 ```text
 1. products -> categories, sub_categories
 2. orders   -> orders, order_items
 ```
 
-เหตุผลคือ `order_items` มี foreign key ไปยัง `categories` และ `sub_categories`
-ถ้า import order ก่อน master data จะทำให้ข้อมูลอ้างอิงไม่ครบ
+ต้อง import product master ก่อน เพราะ `order_items` มี foreign key ไปยัง `categories`
+และ `sub_categories`
 
-ใน service จึงมีการตรวจ master data ก่อนบันทึก order ถ้าพบ category/subCategory ที่ยังไม่มี
-ระบบจะตอบ error กลับไปพร้อมรายการ id ที่ขาด
+ถ้า import order ก่อน ระบบจะตรวจเจอว่า master data ยังไม่ครบและตอบ error กลับไป
+พร้อมรายการ category/subCategory ที่ขาด เพื่อให้แก้ปัญหาได้ง่าย
 
-## การ normalize ข้อมูลจาก source
+## Normalization
 
-ข้อมูลจาก source มีโครงสร้างซ้อนกันหลายชั้น จึงต้องแปลงเป็น relational rows ก่อนบันทึก
+ข้อมูล source เป็น nested JSON จึงต้อง normalize ก่อนบันทึกลง relational database
 
-### Product source
+Product source:
 
 ```text
 productList[]
@@ -211,42 +194,42 @@ productList[]
     -> subcategory[]
 ```
 
-แปลงเป็น:
+ถูกแปลงเป็น:
 
 ```text
 categories
 sub_categories
 ```
 
-### Order source
+Order source:
 
 ```text
 buyTransaction[] / sellTransaction[]
   -> order
-    -> requestList[]          กลุ่มสินค้า
-      -> requestList[]        รายการแยก grade
+    -> requestList[]       กลุ่มสินค้า
+      -> requestList[]     รายการแยก grade
 ```
 
-แปลงเป็น:
+ถูกแปลงเป็น:
 
 ```text
 orders
 order_items
 ```
 
-ระบบเก็บเฉพาะ grade ที่รองรับคือ `A`, `B`, `C`, `D`
+ระบบจะเก็บเฉพาะ grade ที่อยู่ในชุด `A`, `B`, `C`, `D`
 
-กรณี source ส่ง `total` เป็น 0:
+ถ้า source ส่ง `total` เป็น `0` จะคำนวณมูลค่าใหม่จาก:
 
 ```text
 total_amount = quantity * price
 ```
 
-เพื่อให้รายงานยังคำนวณยอดรวมได้
+เพื่อให้ summary ยังแสดงยอดเงินได้ครบ
 
-## การคำนวณ summary
+## Summary Calculation
 
-Summary API query จาก `order_items` แล้ว join ไปที่ตารางอื่น:
+Summary query อ่านจาก `order_items` แล้ว join ไปยัง `orders`, `categories` และ `sub_categories`
 
 ```text
 order_items
@@ -268,41 +251,40 @@ order_items
 | แยก grade | group by `grade` และ `transaction_type` |
 | ช่วงราคา | min/max `price_per_kg` โดยไม่นับ 0 เป็นราคาต่ำสุด |
 
-ตัวอย่างการคิดคงเหลือ:
+สูตรคงเหลือ:
 
 ```text
 remaining_quantity_kg = buy_quantity_kg - sell_quantity_kg
 remaining_amount      = buy_total_amount - sell_total_amount
 ```
 
-## การทำงานของ filter ในรายงาน
+## Filter Mapping
 
-| Filter | ใช้ field |
+| Filter จาก API | Field ที่ใช้ |
 | --- | --- |
-| วันที่ | `orders.order_finished_date` |
-| Category | `order_items.category_id` |
-| SubCategory | `order_items.sub_category_id` |
-| OrderId | `orders.order_id` |
-| ช่วงราคา | `order_items.price_per_kg` |
-| Grade | `order_items.grade` |
+| `startDate`, `endDate` | `orders.order_finished_date` |
+| `categoryId` | `order_items.category_id` |
+| `subCategoryId` | `order_items.sub_category_id` |
+| `orderId` | `orders.order_id` |
+| `minPrice`, `maxPrice` | `order_items.price_per_kg` |
+| `grade` | `order_items.grade` |
 
-สำคัญ: grade filter ถูก apply ก่อน aggregate
-ดังนั้นเมื่อเลือก `grade=A` ระบบจะคำนวณยอดรวมจาก item grade A เท่านั้น
+Grade filter ถูก apply ก่อน aggregate ดังนั้นถ้าเลือก `grade=A`
+ยอดซื้อรวม ยอดขายรวม และคงเหลือจะคำนวณจาก item grade A เท่านั้น
 
-## ทำไมไม่สร้าง summary table แยก
+## ทำไมยังไม่แยก Summary Table
 
-สำหรับขอบเขตของ assignment นี้ ระบบคำนวณ summary จาก `order_items` โดยตรง เพราะ:
+ระบบคำนวณ summary จาก `order_items` โดยตรง เพราะเหมาะกับขอบเขตของ assignment นี้มากกว่า
+
+เหตุผล:
 
 ```text
 1. ลดการเก็บข้อมูลซ้ำ
-2. ข้อมูล summary เปลี่ยนตาม filter ได้หลายแบบ
-3. ไม่ต้องดูแลการ sync ระหว่าง raw data กับ summary table
-4. ข้อมูลต้นทางมีขนาดเหมาะกับการ aggregate แบบ query-time
-5. โครงสร้างยังต่อยอดเป็น materialized view หรือ summary table ได้ในอนาคต
+2. filter มีหลายรูปแบบและเปลี่ยนได้ตลอด
+3. ไม่ต้องดูแล sync ระหว่าง raw data กับ summary table
+4. raw data ยังเป็น source of truth ที่ตรวจสอบย้อนหลังได้
+5. ถ้าข้อมูลใหญ่ขึ้น สามารถเพิ่ม materialized view หรือ scheduled summary table ได้ภายหลัง
 ```
-
-ถ้าระบบนี้ต้องรองรับข้อมูลจำนวนมากใน production สามารถเพิ่ม materialized view หรือ scheduled summary table ได้ภายหลัง
-โดยยังใช้ schema ตั้งต้นชุดเดิมเป็น source of truth
 
 ## ไฟล์ที่เกี่ยวข้อง
 
