@@ -1,0 +1,72 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Category {
+  id            String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  categoryId    String        @unique @map("category_id") @db.VarChar(50)
+  categoryName  String        @map("category_name") @db.VarChar(255)
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @default(now()) @map("updated_at")
+  subCategories SubCategory[]
+  orderItems    OrderItem[]
+
+  @@map("categories")
+}
+
+model SubCategory {
+  id              String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  subCategoryId   String      @unique @map("sub_category_id") @db.VarChar(50)
+  categoryId      String      @map("category_id") @db.VarChar(50)
+  subCategoryName String      @map("sub_category_name") @db.VarChar(255)
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @default(now()) @map("updated_at")
+  category        Category    @relation(fields: [categoryId], references: [categoryId], onUpdate: Cascade, onDelete: Restrict)
+  orderItems      OrderItem[]
+
+  @@index([categoryId], map: "idx_sub_categories_category_id")
+  @@map("sub_categories")
+}
+
+model Order {
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId           String          @unique @map("order_id") @db.VarChar(100)
+  orderFinishedDate DateTime        @map("order_finished_date") @db.Date
+  transactionType   String          @map("transaction_type") @db.VarChar(10)
+  createdAt         DateTime        @default(now()) @map("created_at")
+  updatedAt         DateTime        @default(now()) @map("updated_at")
+  items             OrderItem[]
+
+  @@index([orderFinishedDate], map: "idx_orders_finished_date")
+  @@index([transactionType], map: "idx_orders_transaction_type")
+  @@index([orderId], map: "idx_orders_order_id")
+  @@map("orders")
+}
+
+model OrderItem {
+  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId       String      @map("order_id") @db.VarChar(100)
+  categoryId    String      @map("category_id") @db.VarChar(50)
+  subCategoryId String      @map("sub_category_id") @db.VarChar(50)
+  grade         String      @db.VarChar(1)
+  quantityKg    Decimal     @default(0) @map("quantity_kg") @db.Decimal(14, 2)
+  pricePerKg    Decimal     @default(0) @map("price_per_kg") @db.Decimal(14, 2)
+  totalAmount   Decimal     @default(0) @map("total_amount") @db.Decimal(14, 2)
+  createdAt     DateTime    @default(now()) @map("created_at")
+  updatedAt     DateTime    @default(now()) @map("updated_at")
+  order         Order       @relation(fields: [orderId], references: [orderId], onUpdate: Cascade, onDelete: Cascade)
+  category      Category    @relation(fields: [categoryId], references: [categoryId], onUpdate: Cascade, onDelete: Restrict)
+  subCategory   SubCategory @relation(fields: [subCategoryId], references: [subCategoryId], onUpdate: Cascade, onDelete: Restrict)
+
+  @@index([categoryId], map: "idx_order_items_category_id")
+  @@index([subCategoryId], map: "idx_order_items_sub_category_id")
+  @@index([grade], map: "idx_order_items_grade")
+  @@index([pricePerKg], map: "idx_order_items_price_per_kg")
+  @@index([categoryId, subCategoryId, grade, pricePerKg], map: "idx_order_items_summary_filters")
+  @@map("order_items")
+}
