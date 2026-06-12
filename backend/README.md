@@ -223,10 +223,5 @@ GET /api/product-summaries?categoryId=01&subCategoryId=0101&orderId=CUNIIPRO&min
 เมื่อเลือก `grade` ระบบจะ filter ที่ระดับ `order_items` ก่อน แล้วค่อย aggregate
 ดังนั้นยอดรวมที่ได้จะเป็นยอดเฉพาะ grade นั้นจริง ๆ
 
-## ตรวจสอบก่อนส่งงาน
 
-```bash
-npm run lint
-npm run build
-```
 
